@@ -1,0 +1,317 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Resolve the lib directory relative to this script
+BROWSER_POOL_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BROWSER_POOL_LIB_DIR="$(cd "${BROWSER_POOL_BIN_DIR}/../lib" && pwd)"
+BROWSER_POOL_DOCKER_DIR="$(cd "${BROWSER_POOL_BIN_DIR}/../docker" && pwd)"
+export BROWSER_POOL_LIB_DIR
+
+# Source all library files
+source "${BROWSER_POOL_LIB_DIR}/config.sh"
+source "${BROWSER_POOL_LIB_DIR}/port.sh"
+source "${BROWSER_POOL_LIB_DIR}/container.sh"
+source "${BROWSER_POOL_LIB_DIR}/lease.sh"
+source "${BROWSER_POOL_LIB_DIR}/queue.sh"
+source "${BROWSER_POOL_LIB_DIR}/gc.sh"
+
+usage() {
+  cat <<EOF
+Usage: browser-pool <command> [options]
+
+Commands:
+  acquire     Acquire a browser from the pool (blocks if full)
+  release     Release a browser back to the pool
+  exec        Acquire, run a command, then release automatically
+  status      Show pool status (active, queued, idle)
+  gc          Garbage collect idle/stale containers
+  destroy-all Remove all pool containers
+  build       Build the browser-pool Docker image
+  config      Show effective configuration
+  dashboard   Open a live dashboard with all browsers in iframes
+
+Options for acquire/exec:
+  --project <name>      Project identifier (default: unknown)
+  --network <name>      Docker network to connect to
+  --mount <host:cont>   Bind mount into the container
+  --timeout <seconds>   Max wait time if pool is full (default: ${BROWSER_POOL_ACQUIRE_TIMEOUT})
+
+Options for release:
+  <lease_id>            The lease ID returned by acquire
+
+Options for gc:
+  --max-idle <seconds>  Override idle TTL (default: ${BROWSER_POOL_IDLE_TTL})
+
+Options for exec:
+  [acquire-opts] -- <command...>
+  Environment variables set for the command:
+    BROWSER_POOL_XPRA_PORT      Xpra port on localhost
+    BROWSER_POOL_CONTAINER_ID   Docker container ID
+    BROWSER_POOL_WORKER_INDEX   Worker index (0-based)
+    BROWSER_POOL_LEASE_ID       Lease ID
+    BROWSER_POOL_XPRA_URL       Full Xpra URL
+EOF
+}
+
+cmd_acquire() {
+  local project="unknown"
+  local network=""
+  local mount=""
+  local timeout="$BROWSER_POOL_ACQUIRE_TIMEOUT"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --project) project="$2"; shift 2 ;;
+      --network) network="$2"; shift 2 ;;
+      --mount) mount="$2"; shift 2 ;;
+      --timeout) timeout="$2"; shift 2 ;;
+      *) bp_log "Unknown option: $1"; return 1 ;;
+    esac
+  done
+
+  bp_acquire "$project" "$network" "$mount" "$timeout"
+}
+
+cmd_release() {
+  if [[ $# -lt 1 ]]; then
+    bp_log "Usage: browser-pool release <lease_id>"
+    return 1
+  fi
+  bp_release "$1"
+}
+
+cmd_exec() {
+  local project="unknown"
+  local network=""
+  local mount=""
+  local timeout="$BROWSER_POOL_ACQUIRE_TIMEOUT"
+  local cmd_args=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --project) project="$2"; shift 2 ;;
+      --network) network="$2"; shift 2 ;;
+      --mount) mount="$2"; shift 2 ;;
+      --timeout) timeout="$2"; shift 2 ;;
+      --)
+        shift
+        cmd_args=("$@")
+        break
+        ;;
+      *)
+        # If no --, treat remaining as command
+        cmd_args=("$@")
+        break
+        ;;
+    esac
+  done
+
+  if [[ ${#cmd_args[@]} -eq 0 ]]; then
+    bp_log "Usage: browser-pool exec [options] -- <command...>"
+    return 1
+  fi
+
+  # Acquire a browser
+  local result
+  result="$(bp_acquire "$project" "$network" "$mount" "$timeout")" || return $?
+
+  # Parse JSON result (simple extraction)
+  local lease_id xpra_port container_id worker_index xpra_url
+  lease_id="$(echo "$result" | sed 's/.*"lease_id":"\([^"]*\)".*/\1/')"
+  xpra_port="$(echo "$result" | sed 's/.*"xpra_port":\([0-9]*\).*/\1/')"
+  container_id="$(echo "$result" | sed 's/.*"container_id":"\([^"]*\)".*/\1/')"
+  worker_index="$(echo "$result" | sed 's/.*"worker_index":\([0-9]*\).*/\1/')"
+  xpra_url="$(echo "$result" | sed 's/.*"xpra_url":"\([^"]*\)".*/\1/')"
+
+  # Release on exit (trap before exec so we can still release)
+  _bp_exec_cleanup() {
+    bp_release "$lease_id" 2>/dev/null || true
+  }
+  trap _bp_exec_cleanup EXIT INT TERM
+
+  # Export env vars and run the command
+  export BROWSER_POOL_XPRA_PORT="$xpra_port"
+  export BROWSER_POOL_CONTAINER_ID="$container_id"
+  export BROWSER_POOL_WORKER_INDEX="$worker_index"
+  export BROWSER_POOL_LEASE_ID="$lease_id"
+  export BROWSER_POOL_XPRA_URL="$xpra_url"
+
+  bp_log "Acquired browser: port=${xpra_port} worker=${worker_index} lease=${lease_id}"
+
+  # Run the command (not exec, so trap can fire)
+  "${cmd_args[@]}"
+  local rc=$?
+
+  # Cleanup will be called by trap
+  return $rc
+}
+
+cmd_status() {
+  local now
+  now="$(bp_now)"
+
+  # Active leases
+  local has_active=false
+  printf 'ACTIVE LEASES:\n'
+  printf '  %-16s %-7s %-8s %-20s %s\n' "CONTAINER" "PORT" "WORKER" "PROJECT" "HELD FOR"
+
+  local file
+  local active_count=0
+  local idle_count=0
+  while IFS= read -r file; do
+    [[ -n "$file" ]] || continue
+    local status
+    status="$(grep '"status"' "$file" | sed 's/.*: *"\([^"]*\)".*/\1/')"
+    if [[ "$status" != "leased" ]]; then
+      continue
+    fi
+
+    local container_id leased_at project worker_index
+    container_id="$(grep '"container_id"' "$file" | sed 's/.*: *"\([^"]*\)".*/\1/')"
+    leased_at="$(grep '"leased_at"' "$file" | sed 's/.*: *\([0-9]*\).*/\1/')"
+    project="$(grep '"leased_by"' "$file" | sed 's/.*: *"\([^"]*\)".*/\1/')"
+    worker_index="$(grep '"worker_index"' "$file" | sed 's/.*: *\([0-9]*\).*/\1/')"
+
+    # Verify container exists
+    if ! docker inspect "$container_id" > /dev/null 2>&1; then
+      continue
+    fi
+
+    local port
+    port="$(bp_container_port "$container_id")"
+    local held_for="$((now - leased_at))"
+    local short_id="${container_id:0:12}"
+    local name
+    name="$(bp_container_name "$container_id" 2>/dev/null)" || name="$short_id"
+
+    printf '  %-16s %-7s %-8s %-20s %s\n' "$name" "$port" "$worker_index" "$project" "$(bp_format_duration "$held_for")"
+    has_active=true
+    active_count="$((active_count + 1))"
+  done < <(bp_list_lease_files)
+
+  if [[ "$has_active" == "false" ]]; then
+    printf '  (none)\n'
+  fi
+
+  # Queue
+  printf '\nQUEUED (waiting for browser):\n'
+  printf '  %-20s %s\n' "PROJECT" "WAITING FOR"
+  local queue_output
+  queue_output="$(bp_list_queue)"
+  if [[ -n "$queue_output" ]]; then
+    echo "$queue_output"
+  else
+    printf '  (none)\n'
+  fi
+
+  # Idle containers
+  printf '\nIDLE:\n'
+  printf '  %-16s %-7s %s\n' "CONTAINER" "PORT" "IDLE FOR"
+  local has_idle=false
+
+  while IFS= read -r file; do
+    [[ -n "$file" ]] || continue
+    local status
+    status="$(grep '"status"' "$file" | sed 's/.*: *"\([^"]*\)".*/\1/')"
+    if [[ "$status" != "idle" ]]; then
+      continue
+    fi
+
+    local container_id updated_at
+    container_id="$(grep '"container_id"' "$file" | sed 's/.*: *"\([^"]*\)".*/\1/')"
+    updated_at="$(grep '"updated_at"' "$file" | sed 's/.*: *\([0-9]*\).*/\1/')"
+
+    if ! docker inspect "$container_id" > /dev/null 2>&1; then
+      continue
+    fi
+
+    local port
+    port="$(bp_container_port "$container_id")"
+    local idle_for="$((now - updated_at))"
+    local name
+    name="$(bp_container_name "$container_id" 2>/dev/null)" || name="${container_id:0:12}"
+
+    printf '  %-16s %-7s %s\n' "$name" "$port" "$(bp_format_duration "$idle_for")"
+    has_idle=true
+    idle_count="$((idle_count + 1))"
+  done < <(bp_list_lease_files)
+
+  if [[ "$has_idle" == "false" ]]; then
+    printf '  (none)\n'
+  fi
+
+  # Summary
+  local total
+  total="$(bp_count_containers)"
+  printf '\nPool: %s/%s containers (%s active, %s idle)\n' "$total" "$BROWSER_POOL_MAX_CONTAINERS" "$active_count" "$idle_count"
+}
+
+cmd_gc() {
+  local max_idle="$BROWSER_POOL_IDLE_TTL"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --max-idle) max_idle="$2"; shift 2 ;;
+      *) bp_log "Unknown option: $1"; return 1 ;;
+    esac
+  done
+
+  if ! bp_lock "$BROWSER_POOL_LOCK_FILE" 10; then
+    bp_log "ERROR: Could not acquire pool lock"
+    return 1
+  fi
+  bp_gc_expired "$max_idle"
+  bp_unlock "$BROWSER_POOL_LOCK_FILE"
+}
+
+cmd_destroy_all() {
+  bp_destroy_all
+}
+
+cmd_build() {
+  bp_log "Building browser-pool Docker image..."
+  docker build -t "${BROWSER_POOL_IMAGE}" "${BROWSER_POOL_DOCKER_DIR}"
+  bp_log "Image built: ${BROWSER_POOL_IMAGE}"
+}
+
+cmd_config() {
+  cat <<EOF
+BROWSER_POOL_IMAGE=${BROWSER_POOL_IMAGE}
+BROWSER_POOL_MAX_CONTAINERS=${BROWSER_POOL_MAX_CONTAINERS}
+BROWSER_POOL_PORT_RANGE_START=${BROWSER_POOL_PORT_RANGE_START}
+BROWSER_POOL_PORT_RANGE_END=${BROWSER_POOL_PORT_RANGE_END}
+BROWSER_POOL_IDLE_TTL=${BROWSER_POOL_IDLE_TTL}
+BROWSER_POOL_LEASE_TTL=${BROWSER_POOL_LEASE_TTL}
+BROWSER_POOL_ACQUIRE_TIMEOUT=${BROWSER_POOL_ACQUIRE_TIMEOUT}
+BROWSER_POOL_STATE_DIR=${BROWSER_POOL_STATE_DIR}
+BROWSER_POOL_SHM_SIZE=${BROWSER_POOL_SHM_SIZE}
+BROWSER_POOL_HEALTH_TIMEOUT=${BROWSER_POOL_HEALTH_TIMEOUT}
+EOF
+}
+
+# Main dispatch
+if [[ $# -eq 0 ]]; then
+  usage
+  exit 1
+fi
+
+command="$1"
+shift
+
+case "$command" in
+  acquire)     cmd_acquire "$@" ;;
+  release)     cmd_release "$@" ;;
+  exec)        cmd_exec "$@" ;;
+  status)      cmd_status ;;
+  gc)          cmd_gc "$@" ;;
+  destroy-all) cmd_destroy_all ;;
+  build)       cmd_build ;;
+  config)      cmd_config ;;
+  dashboard)   exec "${BROWSER_POOL_BIN_DIR}/browser-pool-dashboard" "$@" ;;
+  help|--help|-h) usage ;;
+  *)
+    bp_log "Unknown command: $command"
+    usage
+    exit 1
+    ;;
+esac

@@ -1,0 +1,262 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+BROWSER_POOL_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BROWSER_POOL_LIB_DIR="$(cd "${BROWSER_POOL_BIN_DIR}/../lib" && pwd)"
+export BROWSER_POOL_LIB_DIR
+
+source "${BROWSER_POOL_LIB_DIR}/config.sh"
+
+DASHBOARD_PORT="${1:-9222}"
+
+printf 'Dashboard: http://127.0.0.1:%s/\n' "$DASHBOARD_PORT" >&2
+printf 'Press Ctrl-C to stop.\n\n' >&2
+
+exec python3 - "$DASHBOARD_PORT" "$BROWSER_POOL_LIB_DIR" <<'PYEOF'
+import http.server
+import json
+import subprocess
+import sys
+import time
+
+DASHBOARD_PORT = int(sys.argv[1])
+LIB_DIR = sys.argv[2]
+
+DASHBOARD_HTML = '''<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>browser-pool dashboard</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    padding: 12px;
+  }
+  h1 {
+    font-size: 16px;
+    font-weight: 500;
+    padding: 8px 0 12px;
+    color: #8888cc;
+  }
+  .grid {
+    display: grid;
+    gap: 8px;
+  }
+  .cell {
+    border: 2px solid #333366;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #16213e;
+  }
+  .cell.idle {
+    border-color: #444444;
+    opacity: 0.6;
+  }
+  .label {
+    font-size: 12px;
+    padding: 6px 10px;
+    background: #0f3460;
+    color: #a0c4ff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .label a {
+    color: inherit;
+    text-decoration: none;
+    border-bottom: 1px dotted currentColor;
+  }
+  .label a:hover { color: #fff; }
+  .cell.idle .label {
+    background: #333333;
+    color: #888888;
+  }
+  iframe {
+    width: 100%;
+    height: 50vh;
+    border: none;
+    background: #000;
+  }
+  .empty {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 60px 20px;
+    color: #666;
+    font-size: 14px;
+    line-height: 2;
+  }
+  code {
+    background: #333;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+  <h1 id="title">browser-pool</h1>
+  <div class="grid" id="grid"></div>
+<script>
+  let knownPorts = {};
+
+  function formatDuration(s) {
+    if (s >= 3600) return Math.floor(s/3600) + "h " + Math.floor((s%3600)/60) + "m";
+    if (s >= 60) return Math.floor(s/60) + "m " + (s%60) + "s";
+    return s + "s";
+  }
+
+  async function poll() {
+    try {
+      const resp = await fetch("/api/status");
+      const data = await resp.json();
+      update(data);
+    } catch(e) {}
+  }
+
+  function update(entries) {
+    const grid = document.getElementById("grid");
+    const title = document.getElementById("title");
+    const now = Math.floor(Date.now() / 1000);
+
+    title.textContent = "browser-pool \\u2014 " + entries.length + " browser(s)";
+
+    const cols = entries.length <= 1 ? 1 : (entries.length >= 4 ? 3 : 2);
+    grid.style.gridTemplateColumns = "repeat(" + cols + ", 1fr)";
+
+    // Build a set of current ports
+    const currentPorts = {};
+    entries.forEach(function(e) { currentPorts[e.port] = e; });
+
+    // Remove cells for ports that no longer exist
+    Object.keys(knownPorts).forEach(function(port) {
+      if (!currentPorts[port]) {
+        const el = document.getElementById("cell-" + port);
+        if (el) el.remove();
+        delete knownPorts[port];
+      }
+    });
+
+    if (entries.length === 0 && !document.getElementById("empty-msg")) {
+      grid.innerHTML = '<div class="empty" id="empty-msg">No active browsers in the pool.<br>Run <code>bin/rspec</code> or <code>bin/parallel_rspec</code> to get started.</div>';
+      return;
+    }
+
+    const emptyMsg = document.getElementById("empty-msg");
+    if (emptyMsg && entries.length > 0) emptyMsg.remove();
+
+    entries.forEach(function(e) {
+      const port = e.port;
+      let cell = document.getElementById("cell-" + port);
+
+      if (!cell) {
+        // New container — create cell with iframe
+        cell = document.createElement("div");
+        cell.className = "cell" + (e.status === "idle" ? " idle" : "");
+        cell.id = "cell-" + port;
+
+        const label = document.createElement("div");
+        label.className = "label";
+        label.id = "label-" + port;
+        cell.appendChild(label);
+
+        const iframe = document.createElement("iframe");
+        iframe.src = "http://127.0.0.1:" + port + "/?reconnect=true&keyboard=false";
+        iframe.loading = "lazy";
+        cell.appendChild(iframe);
+
+        grid.appendChild(cell);
+        knownPorts[port] = true;
+      }
+
+      // Update label text (no iframe reload)
+      const label = document.getElementById("label-" + port);
+      cell.className = "cell" + (e.status === "idle" ? " idle" : "");
+
+      if (e.status === "leased") {
+        const dur = formatDuration(now - e.leased_at);
+        label.innerHTML = '<a href="http://127.0.0.1:' + port + '/?reconnect=true" target="_blank">Worker ' + e.worker_index + '</a> &mdash; ' + e.project + ' (' + dur + ')';
+      } else {
+        const dur = formatDuration(now - e.updated_at);
+        label.innerHTML = '<a href="http://127.0.0.1:' + port + '/?reconnect=true" target="_blank">Idle</a> (' + dur + ')';
+      }
+    });
+  }
+
+  poll();
+  setInterval(poll, 5000);
+</script>
+</body>
+</html>'''
+
+
+def collect_entries():
+    try:
+        result = subprocess.run(
+            ["bash", "-c", f"""
+                source '{LIB_DIR}/config.sh'
+                entries=""
+                while IFS= read -r file; do
+                    [[ -n "$file" ]] || continue
+                    status="$(grep '"status"' "$file" | sed 's/.*: *"\\([^"]*\\)".*/\\1/')"
+                    container_id="$(grep '"container_id"' "$file" | sed 's/.*: *"\\([^"]*\\)".*/\\1/')"
+                    docker inspect "$container_id" > /dev/null 2>&1 || continue
+                    port="$(bp_container_port "$container_id")"
+                    project="$(grep '"leased_by"' "$file" | sed 's/.*: *"\\([^"]*\\)".*/\\1/')"
+                    worker_index="$(grep '"worker_index"' "$file" | sed 's/.*: *\\([0-9]*\\).*/\\1/')"
+                    leased_at="$(grep '"leased_at"' "$file" | sed 's/.*: *\\([0-9]*\\).*/\\1/')"
+                    updated_at="$(grep '"updated_at"' "$file" | sed 's/.*: *\\([0-9]*\\).*/\\1/')"
+                    if [[ -n "$entries" ]]; then entries="${{entries}},"; fi
+                    entries="${{entries}}{{\\\"port\\\":${{port}},\\\"status\\\":\\\"${{status}}\\\",\\\"project\\\":\\\"${{project}}\\\",\\\"worker_index\\\":${{worker_index}},\\\"leased_at\\\":${{leased_at}},\\\"updated_at\\\":${{updated_at}}}}"
+                done < <(bp_list_lease_files)
+                echo "[${{entries}}]"
+            """],
+            capture_output=True, text=True, timeout=10,
+        )
+        return result.stdout.strip() if result.stdout.strip() else "[]"
+    except Exception:
+        return "[]"
+
+
+class DashboardHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass
+
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except BrokenPipeError:
+            pass
+
+    def do_GET(self):
+        if self.path == "/" or self.path == "/index.html":
+            body = DASHBOARD_HTML.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/api/status":
+            data = collect_entries().encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
+        self.send_error(404)
+
+
+server = http.server.HTTPServer(("127.0.0.1", DASHBOARD_PORT), DashboardHandler)
+try:
+    server.serve_forever()
+except KeyboardInterrupt:
+    pass
+finally:
+    server.server_close()
+PYEOF
