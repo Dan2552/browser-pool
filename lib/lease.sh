@@ -131,12 +131,33 @@ bp_do_acquire() {
   fi
 
   if [[ "$reused" == "true" ]]; then
-    # Reset browser state in reused container
-    bp_restart_xpra "$container_id" 2>/dev/null || true
+    # Verify the mount matches — volumes can't be changed on a running container
+    if [[ -n "$mount" ]]; then
+      local want_src="${mount%%:*}"
+      local want_dst="${mount#*:}"
+      local has_mount
+      has_mount="$(docker inspect --format '{{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}' "$container_id" 2>/dev/null)"
+      if ! echo "$has_mount" | grep -q "${want_src}:${want_dst}"; then
+        # Mount doesn't match — can't reuse this container, create a new one
+        reused=false
+        container_id=""
+        local count
+        count="$(bp_count_containers)"
+        if [[ "$count" -ge "$BROWSER_POOL_MAX_CONTAINERS" ]]; then
+          return 1  # At capacity
+        fi
+        container_id="$(bp_create_container "$network" "$mount")" || return 2
+      fi
+    fi
 
-    # If network specified, connect the container to it
-    if [[ -n "$network" ]]; then
-      docker network connect "$network" "$container_id" 2>/dev/null || true
+    if [[ "$reused" == "true" ]]; then
+      # Reset browser state in reused container
+      bp_restart_xpra "$container_id" 2>/dev/null || true
+
+      # If network specified, connect the container to it
+      if [[ -n "$network" ]]; then
+        docker network connect "$network" "$container_id" 2>/dev/null || true
+      fi
     fi
   fi
 
