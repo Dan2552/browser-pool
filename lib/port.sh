@@ -5,6 +5,7 @@ bp_used_ports() {
   local id
   for id in $(bp_list_containers); do
     bp_container_port "$id"
+    bp_container_playwright_port "$id"
   done
 }
 
@@ -21,12 +22,16 @@ bp_port_in_use_on_host() {
 }
 
 bp_allocate_port() {
+  local exclude="${1:-}"
   local used
   used="$(bp_used_ports)"
+  if [[ -n "$exclude" ]]; then
+    used="$(printf '%s\n%s' "$used" "$exclude")"
+  fi
 
   local port
   for port in $(seq "$BROWSER_POOL_PORT_RANGE_START" "$BROWSER_POOL_PORT_RANGE_END"); do
-    # Skip if already used by a pool container
+    # Skip if already used by a pool container or explicitly excluded
     if echo "$used" | grep -qx "$port" 2>/dev/null; then
       continue
     fi
@@ -38,6 +43,6 @@ bp_allocate_port() {
     return 0
   done
 
-  bp_log "ERROR: No available ports in range ${BROWSER_POOL_PORT_RANGE_START}-${BROWSER_POOL_PORT_RANGE_END}"
+  bp_log_error "ERROR: No available ports in range ${BROWSER_POOL_PORT_RANGE_START}-${BROWSER_POOL_PORT_RANGE_END}"
   return 1
 }

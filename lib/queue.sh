@@ -94,7 +94,7 @@ bp_queue_and_wait() {
 
   bp_remove_queue_entry "$queue_id"
   trap - EXIT
-  bp_log "ERROR: Timed out waiting for browser after ${timeout}s"
+  bp_log_error "ERROR: Timed out waiting for browser after ${timeout}s"
   return 1
 }
 

@@ -107,15 +107,20 @@ bp_do_acquire() {
   local project="${1:-unknown}"
   local network="${2:-}"
   local mount="${3:-}"
+  local _pf_acquire_start; _pf_acquire_start="$(_bp_profile_ms)"
 
   # Run opportunistic GC
+  local _pf_t; _pf_t="$(_bp_profile_ms)"
   bp_gc_expired 2>/dev/null || true
+  bp_profile "gc" "$_pf_t"
 
   local container_id=""
   local reused=false
 
   # Try to find an idle container
+  _pf_t="$(_bp_profile_ms)"
   container_id="$(bp_find_idle_container 2>/dev/null)" && reused=true || true
+  bp_profile "find idle container" "$_pf_t"
 
   if [[ -z "$container_id" ]]; then
     # Check if we're at capacity
@@ -126,7 +131,9 @@ bp_do_acquire() {
     fi
 
     # Create a new container
+    _pf_t="$(_bp_profile_ms)"
     container_id="$(bp_create_container "$network" "$mount")" || return 2
+    bp_profile "create container" "$_pf_t"
     reused=false
   fi
 
@@ -152,7 +159,9 @@ bp_do_acquire() {
 
     if [[ "$reused" == "true" ]]; then
       # Reset browser state in reused container
+      _pf_t="$(_bp_profile_ms)"
       bp_restart_xpra "$container_id" 2>/dev/null || true
+      bp_profile "restart xpra" "$_pf_t"
 
       # If network specified, connect the container to it
       if [[ -n "$network" ]]; then
@@ -167,12 +176,31 @@ bp_do_acquire() {
   worker_index="$(bp_next_worker_index)"
   local port
   port="$(bp_container_port "$container_id")"
+  local pw_port
+  pw_port="$(bp_container_playwright_port "$container_id")"
 
+  # Start the Playwright server
+  _pf_t="$(_bp_profile_ms)"
+  local playwright_ws=""
+  if [[ -n "$pw_port" ]]; then
+    playwright_ws="$(bp_start_playwright_server "$container_id" "$pw_port" 2>/dev/null)" || true
+  fi
+  bp_profile "start playwright server" "$_pf_t"
+
+  _pf_t="$(_bp_profile_ms)"
   bp_write_lease "$container_id" "leased" "$lease_id" "$project" "$worker_index"
+  bp_profile "write lease" "$_pf_t"
+
+  bp_profile "acquire (total)" "$_pf_acquire_start"
 
   # Output JSON
-  printf '{"lease_id":"%s","xpra_port":%s,"container_id":"%s","worker_index":%s,"xpra_url":"http://127.0.0.1:%s/?reconnect=true"}\n' \
-    "$lease_id" "$port" "$container_id" "$worker_index" "$port"
+  if [[ -n "$playwright_ws" ]]; then
+    printf '{"lease_id":"%s","xpra_port":%s,"container_id":"%s","worker_index":%s,"xpra_url":"http://127.0.0.1:%s/?reconnect=true","playwright_ws":"%s"}\n' \
+      "$lease_id" "$port" "$container_id" "$worker_index" "$port" "$playwright_ws"
+  else
+    printf '{"lease_id":"%s","xpra_port":%s,"container_id":"%s","worker_index":%s,"xpra_url":"http://127.0.0.1:%s/?reconnect=true"}\n' \
+      "$lease_id" "$port" "$container_id" "$worker_index" "$port"
+  fi
 }
 
 bp_acquire() {
@@ -183,7 +211,7 @@ bp_acquire() {
 
   # Try under lock
   if ! bp_lock "$BROWSER_POOL_LOCK_FILE" 5; then
-    bp_log "ERROR: Could not acquire pool lock"
+    bp_log_error "ERROR: Could not acquire pool lock"
     return 1
   fi
 
@@ -205,7 +233,7 @@ bp_acquire() {
   fi
 
   # rc == 2 or other: creation failed
-  bp_log "ERROR: Failed to acquire browser"
+  bp_log_error "ERROR: Failed to acquire browser"
   echo "$result" >&2
   return 1
 }
@@ -214,7 +242,7 @@ bp_release() {
   local lease_id="$1"
 
   if ! bp_lock "$BROWSER_POOL_LOCK_FILE" 5; then
-    bp_log "ERROR: Could not acquire pool lock"
+    bp_log_error "ERROR: Could not acquire pool lock"
     return 1
   fi
 
@@ -228,6 +256,7 @@ bp_release() {
 bp_do_release() {
   local lease_id="$1"
   local file
+  local _pf_release_start; _pf_release_start="$(_bp_profile_ms)"
 
   while IFS= read -r file; do
     [[ -n "$file" ]] || continue
@@ -238,20 +267,25 @@ bp_do_release() {
       now="$(bp_now)"
 
       # Mark as idle
+      local _pf_t; _pf_t="$(_bp_profile_ms)"
       local tmp="${file}.tmp.$$"
       printf '{\n  "container_id": "%s",\n  "status": "idle",\n  "lease_id": "",\n  "leased_at": 0,\n  "leased_by": "",\n  "worker_index": -1,\n  "updated_at": %s\n}\n' \
         "$container_id" "$now" > "$tmp"
       mv "$tmp" "$file"
+      bp_profile "write idle lease" "$_pf_t"
 
       # Reset browser state
+      _pf_t="$(_bp_profile_ms)"
       bp_restart_xpra "$container_id" 2>/dev/null || true
+      bp_profile "restart xpra (release)" "$_pf_t"
 
       bp_log "Released lease ${lease_id} (container ${container_id})"
+      bp_profile "release (total)" "$_pf_release_start"
       return 0
     fi
   done < <(bp_list_lease_files)
 
-  bp_log "WARNING: Lease ${lease_id} not found"
+  bp_log_error "WARNING: Lease ${lease_id} not found"
   return 1
 }
 
