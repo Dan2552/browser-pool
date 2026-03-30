@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/playwright:v1.51.0-noble
+FROM mcr.microsoft.com/playwright:v1.58.2-noble
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -33,9 +33,13 @@ RUN printf '%s\n' \
   'Referrer-Policy: no-referrer' \
   > /etc/xpra/http-headers/10_content_security_policy.txt
 
+RUN mkdir -p /opt/playwright-server && cd /opt/playwright-server && npm init -y && npm install playwright@1.58.2
+
 WORKDIR /work
 
 COPY start-xpra.sh /usr/local/bin/start-xpra
 RUN chmod +x /usr/local/bin/start-xpra
+
+COPY start-playwright-server.js /opt/playwright-server/start-playwright-server.js
 
 CMD ["start-xpra"]

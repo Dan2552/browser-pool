@@ -50,6 +50,7 @@ Options for exec:
     BROWSER_POOL_WORKER_INDEX   Worker index (0-based)
     BROWSER_POOL_LEASE_ID       Lease ID
     BROWSER_POOL_XPRA_URL       Full Xpra URL
+    BROWSER_POOL_PLAYWRIGHT_WS  Playwright WebSocket endpoint (for remote automation)
 EOF
 }
 
@@ -115,19 +116,21 @@ cmd_exec() {
   local result
   result="$(bp_acquire "$project" "$network" "$mount" "$timeout")" || return $?
 
-  # Parse JSON result (simple extraction)
-  local lease_id xpra_port container_id worker_index xpra_url
-  lease_id="$(echo "$result" | sed 's/.*"lease_id":"\([^"]*\)".*/\1/')"
-  xpra_port="$(echo "$result" | sed 's/.*"xpra_port":\([0-9]*\).*/\1/')"
-  container_id="$(echo "$result" | sed 's/.*"container_id":"\([^"]*\)".*/\1/')"
-  worker_index="$(echo "$result" | sed 's/.*"worker_index":\([0-9]*\).*/\1/')"
-  xpra_url="$(echo "$result" | sed 's/.*"xpra_url":"\([^"]*\)".*/\1/')"
+  # Parse JSON result — extract only the JSON line (contains "lease_id")
+  local json_line
+  json_line="$(echo "$result" | grep '"lease_id"')"
+
+  local lease_id xpra_port container_id worker_index xpra_url playwright_ws
+  lease_id="$(echo "$json_line" | sed 's/.*"lease_id":"\([^"]*\)".*/\1/')"
+  xpra_port="$(echo "$json_line" | sed 's/.*"xpra_port":\([0-9]*\).*/\1/')"
+  container_id="$(echo "$json_line" | sed 's/.*"container_id":"\([^"]*\)".*/\1/')"
+  worker_index="$(echo "$json_line" | sed 's/.*"worker_index":\([0-9]*\).*/\1/')"
+  xpra_url="$(echo "$json_line" | sed 's/.*"xpra_url":"\([^"]*\)".*/\1/')"
+  playwright_ws="$(echo "$json_line" | sed -n 's/.*"playwright_ws":"\([^"]*\)".*/\1/p')"
 
   # Release on exit (trap before exec so we can still release)
-  _bp_exec_cleanup() {
-    bp_release "$lease_id" 2>/dev/null || true
-  }
-  trap _bp_exec_cleanup EXIT INT TERM
+  # Capture lease_id in the trap string so it survives scope changes
+  trap "bp_release '${lease_id}' 2>/dev/null || true" EXIT INT TERM
 
   # Export env vars and run the command
   export BROWSER_POOL_XPRA_PORT="$xpra_port"
@@ -135,8 +138,14 @@ cmd_exec() {
   export BROWSER_POOL_WORKER_INDEX="$worker_index"
   export BROWSER_POOL_LEASE_ID="$lease_id"
   export BROWSER_POOL_XPRA_URL="$xpra_url"
+  if [[ -n "$playwright_ws" ]]; then
+    export BROWSER_POOL_PLAYWRIGHT_WS="$playwright_ws"
+  fi
 
   bp_log "Acquired browser: port=${xpra_port} worker=${worker_index} lease=${lease_id}"
+  if [[ -n "$playwright_ws" ]]; then
+    bp_log "Playwright WebSocket: ${playwright_ws}"
+  fi
 
   # Run the command (not exec, so trap can fire)
   "${cmd_args[@]}"
@@ -257,7 +266,7 @@ cmd_gc() {
   done
 
   if ! bp_lock "$BROWSER_POOL_LOCK_FILE" 10; then
-    bp_log "ERROR: Could not acquire pool lock"
+    bp_log_error "ERROR: Could not acquire pool lock"
     return 1
   fi
   bp_gc_expired "$max_idle"

@@ -19,8 +19,37 @@ mkdir -p "${BROWSER_POOL_STATE_DIR}/leases" "${BROWSER_POOL_STATE_DIR}/queue"
 # Lock file for atomic operations
 BROWSER_POOL_LOCK_FILE="${BROWSER_POOL_STATE_DIR}/pool.lock"
 
+BROWSER_POOL_QUIET="${BROWSER_POOL_QUIET:-0}"
+
 bp_log() {
+  [[ "$BROWSER_POOL_QUIET" == "1" ]] && return 0
   printf '[browser-pool] %s\n' "$*" >&2
+}
+
+bp_log_error() {
+  printf '[browser-pool] %s\n' "$*" >&2
+}
+
+PROFILE_BROWSER_POOL="${PROFILE_BROWSER_POOL:-0}"
+
+# fd 3 is used for profile output so it survives 2>&1 redirections.
+# If fd 3 isn't open yet, point it at stderr.
+if ! { true >&3; } 2>/dev/null; then
+  exec 3>&2
+fi
+
+_bp_profile_ms() {
+  python3 -c 'import time; print(int(time.time()*1000))' 2>/dev/null
+}
+
+bp_profile() {
+  [[ "$PROFILE_BROWSER_POOL" == "1" ]] || return 0
+  local label="$1"
+  local start_ms="$2"
+  local end_ms
+  end_ms="$(_bp_profile_ms)"
+  local elapsed=$(( end_ms - start_ms ))
+  printf '[browser-pool:profile] %-35s %4s ms\n' "$label" "$elapsed" >&3
 }
 
 bp_now() {
@@ -83,6 +112,11 @@ bp_container_label() {
 bp_container_port() {
   local container_id="$1"
   bp_container_label "$container_id" "${BROWSER_POOL_LABEL_PREFIX}.xpra-port"
+}
+
+bp_container_playwright_port() {
+  local container_id="$1"
+  bp_container_label "$container_id" "${BROWSER_POOL_LABEL_PREFIX}.playwright-port"
 }
 
 bp_container_name() {
