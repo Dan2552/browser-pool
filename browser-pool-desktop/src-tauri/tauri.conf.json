@@ -10,9 +10,9 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "browser-pool-desktop",
-        "width": 800,
-        "height": 600
+        "title": "browser-pool",
+        "width": 900,
+        "height": 700
       }
     ],
     "security": {
