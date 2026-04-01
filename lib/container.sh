@@ -109,7 +109,7 @@ bp_start_playwright_server() {
   # Start the playwright server in the background, capturing output
   local log_file="/tmp/playwright-server.log"
   docker exec -d "$container_id" bash -c \
-    "cd /opt/playwright-server && DISPLAY=:100 node start-playwright-server.js > ${log_file} 2>&1"
+    "cd /opt/playwright-server && DISPLAY=:100 PLAYWRIGHT_HEADLESS=${PLAYWRIGHT_HEADLESS:-0} node start-playwright-server.js > ${log_file} 2>&1"
 
   # Wait for the ws path to appear in the log
   local elapsed=0
