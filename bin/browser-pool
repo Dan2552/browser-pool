@@ -24,6 +24,7 @@ Commands:
   release     Release a browser back to the pool
   exec        Acquire, run a command, then release automatically
   status      Show pool status (active, queued, idle)
+  list-leases List all active leases as JSON
   gc          Garbage collect idle/stale containers
   destroy-all Remove all pool containers
   build       Build the browser-pool Docker image
@@ -255,6 +256,44 @@ cmd_status() {
   printf '\nPool: %s/%s containers (%s active, %s idle)\n' "$total" "$BROWSER_POOL_MAX_CONTAINERS" "$active_count" "$idle_count"
 }
 
+cmd_list_leases() {
+  local file
+  local first=true
+  printf '['
+  while IFS= read -r file; do
+    [[ -n "$file" ]] || continue
+    local status
+    status="$(grep '"status"' "$file" | sed 's/.*: *"\([^"]*\)".*/\1/')"
+    if [[ "$status" != "leased" ]]; then
+      continue
+    fi
+
+    local container_id lease_id project worker_index leased_at
+    container_id="$(grep '"container_id"' "$file" | sed 's/.*: *"\([^"]*\)".*/\1/')"
+    lease_id="$(grep '"lease_id"' "$file" | sed 's/.*: *"\([^"]*\)".*/\1/')"
+    project="$(grep '"leased_by"' "$file" | sed 's/.*: *"\([^"]*\)".*/\1/')"
+    worker_index="$(grep '"worker_index"' "$file" | sed 's/.*: *\([0-9]*\).*/\1/')"
+    leased_at="$(grep '"leased_at"' "$file" | sed 's/.*: *\([0-9]*\).*/\1/')"
+
+    # Verify container exists
+    if ! docker inspect "$container_id" > /dev/null 2>&1; then
+      continue
+    fi
+
+    local port
+    port="$(bp_container_port "$container_id")"
+
+    if [[ "$first" == "true" ]]; then
+      first=false
+    else
+      printf ','
+    fi
+    printf '{"lease_id":"%s","xpra_port":%s,"container_id":"%s","worker_index":%s,"project":"%s","leased_at":%s,"xpra_url":"http://127.0.0.1:%s/?reconnect=true"}' \
+      "$lease_id" "$port" "$container_id" "$worker_index" "$project" "$leased_at" "$port"
+  done < <(bp_list_lease_files)
+  printf ']\n'
+}
+
 cmd_gc() {
   local max_idle="$BROWSER_POOL_IDLE_TTL"
 
@@ -316,6 +355,7 @@ case "$command" in
   destroy-all) cmd_destroy_all ;;
   build)       cmd_build ;;
   config)      cmd_config ;;
+  list-leases) cmd_list_leases ;;
   dashboard)   exec "${BROWSER_POOL_BIN_DIR}/browser-pool-dashboard" "$@" ;;
   help|--help|-h) usage ;;
   *)

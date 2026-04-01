@@ -229,3 +229,26 @@ input[type="checkbox"] {
 .release-input-row input:focus {
   outline: 1px solid #8888cc;
 }
+
+.lease-wrapper {
+  margin-bottom: 6px;
+}
+
+.lease-wrapper .lease-card {
+  margin-bottom: 0;
+}
+
+.lease-viewer {
+  border: 1px solid #333366;
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  overflow: hidden;
+  background: #0d1117;
+}
+
+.xpra-iframe {
+  width: 100%;
+  height: 500px;
+  border: none;
+  display: block;
+}
