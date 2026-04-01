@@ -3,12 +3,17 @@
 
 bp_gc_expired() {
   local max_idle="${1:-$BROWSER_POOL_IDLE_TTL}"
+  local max_idle_excess="${BROWSER_POOL_IDLE_TTL_EXCESS}"
   local now
   now="$(bp_now)"
   local lease_dir="${BROWSER_POOL_STATE_DIR}/leases"
   local removed=0
 
-  # Check each lease file
+  # First pass: collect idle containers sorted by most recently used,
+  # and handle stale leases / missing containers.
+  local idle_files=()
+  local idle_updated_ats=()
+
   local file
   while IFS= read -r file; do
     [[ -n "$file" ]] || continue
@@ -31,11 +36,9 @@ bp_gc_expired() {
 
     local age="$((now - updated_at))"
 
-    if [[ "$status" == "idle" && "$age" -ge "$max_idle" ]]; then
-      bp_log "GC: Removing idle container $container_id (idle for $(bp_format_duration "$age"))"
-      bp_remove_container "$container_id"
-      rm -f "$file"
-      removed="$((removed + 1))"
+    if [[ "$status" == "idle" ]]; then
+      idle_files+=("$file")
+      idle_updated_ats+=("$updated_at")
     elif [[ "$status" == "leased" && "$age" -ge "$BROWSER_POOL_LEASE_TTL" ]]; then
       bp_log "GC: Removing stale leased container $container_id (lease expired after $(bp_format_duration "$age"))"
       bp_remove_container "$container_id"
@@ -43,6 +46,49 @@ bp_gc_expired() {
       removed="$((removed + 1))"
     fi
   done < <(bp_list_lease_files)
+
+  # Sort idle containers by updated_at descending (most recent first).
+  # The first one gets max_idle; the rest get max_idle_excess.
+  local idle_count="${#idle_files[@]}"
+  if [[ "$idle_count" -gt 0 ]]; then
+    # Build index array sorted by updated_at descending
+    local sorted_indices
+    sorted_indices="$(
+      for i in $(seq 0 $((idle_count - 1))); do
+        echo "${idle_updated_ats[$i]} $i"
+      done | sort -rn | awk '{print $2}'
+    )"
+
+    local rank=0
+    local idx
+    for idx in $sorted_indices; do
+      local f="${idle_files[$idx]}"
+      local updated_at="${idle_updated_ats[$idx]}"
+      local age="$((now - updated_at))"
+      local ttl
+
+      if [[ "$rank" -eq 0 ]]; then
+        ttl="$max_idle"
+      else
+        ttl="$max_idle_excess"
+      fi
+
+      if [[ "$age" -ge "$ttl" ]]; then
+        local cid
+        cid="$(grep '"container_id"' "$f" | sed 's/.*: *"\([^"]*\)".*/\1/')"
+        if [[ "$rank" -eq 0 ]]; then
+          bp_log "GC: Removing idle container $cid (idle for $(bp_format_duration "$age"))"
+        else
+          bp_log "GC: Removing excess idle container $cid (idle for $(bp_format_duration "$age"), excess TTL $(bp_format_duration "$ttl"))"
+        fi
+        bp_remove_container "$cid"
+        rm -f "$f"
+        removed="$((removed + 1))"
+      fi
+
+      rank="$((rank + 1))"
+    done
+  fi
 
   # Find orphan containers (in Docker but no lease file)
   local id
