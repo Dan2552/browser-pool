@@ -1,112 +1,231 @@
-.logo.vanilla:hover {
-  filter: drop-shadow(0 0 2em #ffe21c);
-}
 :root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-
-  color: #0f0f0f;
-  background-color: #f6f6f6;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Menlo, monospace;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #e0e0e0;
+  background-color: #1a1a2e;
 }
 
-.container {
+* {
   margin: 0;
-  padding-top: 10vh;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+header {
   display: flex;
-  flex-direction: column;
-  justify-content: center;
-  text-align: center;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: #16213e;
+  border-bottom: 1px solid #333366;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
+header h1 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #8888cc;
 }
 
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.row {
+nav {
   display: flex;
-  justify-content: center;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-
-a:hover {
-  color: #535bf2;
-}
-
-h1 {
-  text-align: center;
-}
-
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
+  gap: 6px;
 }
 
 button {
+  padding: 6px 12px;
+  border: 1px solid #333366;
+  border-radius: 4px;
+  background: #0f3460;
+  color: #a0c4ff;
+  font-size: 12px;
   cursor: pointer;
+  font-family: inherit;
 }
 
 button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
+  background: #1a4a7a;
 }
 
-input,
-button {
-  outline: none;
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
-#greet-input {
-  margin-right: 5px;
+button.danger {
+  border-color: #663333;
+  color: #ffa0a0;
+  background: #3d1010;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
-  }
+button.danger:hover {
+  background: #5a1a1a;
+}
 
-  a:hover {
-    color: #24c8db;
-  }
+button.small {
+  padding: 3px 8px;
+  font-size: 11px;
+}
 
-  input,
-  button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
-  }
-  button:active {
-    background-color: #0f0f0f69;
-  }
+.header-controls {
+  display: flex;
+  gap: 12px;
+}
+
+main {
+  padding: 16px;
+  overflow-y: auto;
+  height: calc(100vh - 49px);
+}
+
+section {
+  margin-bottom: 16px;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+h2 {
+  font-size: 13px;
+  font-weight: 600;
+  color: #8888cc;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+pre {
+  background: #0d1117;
+  border: 1px solid #333366;
+  border-radius: 4px;
+  padding: 12px;
+  overflow-x: auto;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: #c9d1d9;
+}
+
+.hidden {
+  display: none !important;
+}
+
+form {
+  max-width: 420px;
+}
+
+.form-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.form-row label {
+  min-width: 80px;
+  font-size: 12px;
+  color: #888;
+}
+
+.form-row input {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid #333366;
+  border-radius: 4px;
+  background: #0d1117;
+  color: #e0e0e0;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.form-row input:focus {
+  outline: 1px solid #8888cc;
+}
+
+.form-row.inline {
+  margin-top: 8px;
+}
+
+.form-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.lease-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: #16213e;
+  border: 1px solid #333366;
+  border-radius: 4px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+
+.lease-card code {
+  background: #0d1117;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.lease-card .lease-info {
+  flex: 1;
+}
+
+.lease-card a {
+  color: #a0c4ff;
+  text-decoration: none;
+  font-size: 11px;
+}
+
+.lease-card a:hover {
+  text-decoration: underline;
+}
+
+label {
+  font-size: 12px;
+  color: #888;
+  cursor: pointer;
+}
+
+input[type="checkbox"] {
+  margin-right: 4px;
+}
+
+#leases-list .empty-state {
+  color: #666;
+  font-size: 12px;
+  font-style: italic;
+}
+
+.release-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.release-input-row input {
+  padding: 5px 8px;
+  border: 1px solid #333366;
+  border-radius: 4px;
+  background: #0d1117;
+  color: #e0e0e0;
+  font-family: inherit;
+  font-size: 12px;
+  width: 260px;
+}
+
+.release-input-row input:focus {
+  outline: 1px solid #8888cc;
 }

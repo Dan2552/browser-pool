@@ -4,36 +4,74 @@
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri App</title>
+    <title>browser-pool</title>
     <script type="module" src="/main.js" defer></script>
   </head>
 
   <body>
-    <main class="container">
-      <h1>Welcome to Tauri</h1>
+    <header>
+      <h1>browser-pool</h1>
+      <nav>
+        <button id="btn-refresh" title="Refresh status">Refresh</button>
+        <button id="btn-acquire" title="Acquire a browser">Acquire</button>
+        <button id="btn-gc" title="Garbage collect">GC</button>
+        <button id="btn-build" title="Build Docker image">Build</button>
+        <button id="btn-config" title="Show configuration">Config</button>
+        <button id="btn-destroy-all" class="danger" title="Destroy all containers">Destroy All</button>
+      </nav>
+    </header>
 
-      <div class="row">
-        <a href="https://tauri.app" target="_blank">
-          <img src="/assets/tauri.svg" class="logo tauri" alt="Tauri logo" />
-        </a>
-        <a
-          href="https://developer.mozilla.org/en-US/docs/Web/JavaScript"
-          target="_blank"
-        >
-          <img
-            src="/assets/javascript.svg"
-            class="logo vanilla"
-            alt="JavaScript logo"
-          />
-        </a>
-      </div>
-      <p>Click on the Tauri logo to learn more about the framework</p>
+    <main>
+      <section id="status-panel">
+        <div class="section-header">
+          <h2>Pool Status</h2>
+          <span class="header-controls">
+            <label><input type="checkbox" id="auto-refresh" checked /> Auto-refresh (5s)</label>
+            <label><input type="checkbox" id="auto-gc" checked /> Auto-GC (60s)</label>
+          </span>
+        </div>
+        <pre id="status-output">Loading...</pre>
+      </section>
 
-      <form class="row" id="greet-form">
-        <input id="greet-input" placeholder="Enter a name..." />
-        <button type="submit">Greet</button>
-      </form>
-      <p id="greet-msg"></p>
+      <section id="acquire-panel" class="hidden">
+        <h2>Acquire Browser</h2>
+        <form id="acquire-form">
+          <div class="form-row">
+            <label for="acquire-project">Project *</label>
+            <input id="acquire-project" type="text" required placeholder="my-project" />
+          </div>
+          <div class="form-row">
+            <label for="acquire-network">Network</label>
+            <input id="acquire-network" type="text" placeholder="(optional)" />
+          </div>
+          <div class="form-row">
+            <label for="acquire-mount">Mount</label>
+            <input id="acquire-mount" type="text" placeholder="/host/path:/container/path" />
+          </div>
+          <div class="form-row">
+            <label for="acquire-timeout">Timeout (s)</label>
+            <input id="acquire-timeout" type="number" placeholder="300" />
+          </div>
+          <div class="form-actions">
+            <button type="submit">Acquire</button>
+            <button type="button" id="acquire-cancel">Cancel</button>
+          </div>
+        </form>
+        <pre id="acquire-result" class="hidden"></pre>
+      </section>
+
+      <section id="leases-panel">
+        <h2>Managed Leases</h2>
+        <div id="leases-list"></div>
+      </section>
+
+      <section id="output-panel" class="hidden">
+        <div class="section-header">
+          <h2>Output</h2>
+          <button id="btn-close-output" class="small">Close</button>
+        </div>
+        <pre id="command-output"></pre>
+      </section>
     </main>
   </body>
 </html>
