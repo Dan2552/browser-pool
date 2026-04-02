@@ -2,8 +2,8 @@ const { invoke } = window.__TAURI__.core;
 
 let autoRefreshInterval = null;
 let autoGCInterval = null;
-let openViewers = {}; // Track which lease_ids have open viewers
-let lastLeasesJson = ""; // Cache to avoid unnecessary re-renders
+let openViewers = {}; // Track which container_ids have open viewers
+let lastContainersJson = ""; // Cache to avoid unnecessary re-renders
 
 // DOM refs
 let statusOutput, commandOutput, outputPanel, acquirePanel, acquireResult, leasesListEl;
@@ -65,25 +65,45 @@ function stopAutoGC() {
 
 async function refreshLeases() {
   try {
-    const result = await invoke("pool_list_leases");
+    const result = await invoke("pool_list_containers");
     const trimmed = result.trim();
     // Skip re-render if data hasn't changed (avoids iframe reload)
-    if (trimmed === lastLeasesJson) return;
-    lastLeasesJson = trimmed;
-    const leases = JSON.parse(trimmed);
-    renderLeases(leases);
+    if (trimmed === lastContainersJson) return;
+    lastContainersJson = trimmed;
+    const containers = JSON.parse(trimmed);
+    renderContainers(containers);
   } catch (e) {
-    if (lastLeasesJson !== "[]") {
-      lastLeasesJson = "[]";
-      renderLeases([]);
+    if (lastContainersJson !== "[]") {
+      lastContainersJson = "[]";
+      renderContainers([]);
     }
   }
 }
 
-function renderLeases(leases) {
+function createViewerEl(xpraUrl) {
+  const viewer = document.createElement("div");
+  viewer.className = "lease-viewer";
+  const toolbar = document.createElement("div");
+  toolbar.className = "lease-viewer-toolbar";
+  const openBtn = document.createElement("button");
+  openBtn.className = "small";
+  openBtn.textContent = "Open in Browser";
+  openBtn.addEventListener("click", () => {
+    window.__TAURI__.opener.openUrl(xpraUrl);
+  });
+  toolbar.appendChild(openBtn);
+  viewer.appendChild(toolbar);
+  const iframe = document.createElement("iframe");
+  iframe.src = xpraUrl + "&keyboard=false";
+  iframe.className = "xpra-iframe";
+  viewer.appendChild(iframe);
+  return viewer;
+}
+
+function renderContainers(containers) {
   leasesListEl.innerHTML = "";
 
-  for (const lease of leases) {
+  for (const c of containers) {
     const wrapper = document.createElement("div");
     wrapper.className = "lease-wrapper";
 
@@ -92,32 +112,29 @@ function renderLeases(leases) {
 
     const info = document.createElement("span");
     info.className = "lease-info";
+
+    const statusLabel = c.status === "leased" ? "leased" : "idle";
     info.innerHTML =
-      "<code>" + lease.lease_id + "</code>" +
-      " &mdash; port " + (lease.xpra_port || "?") +
-      ", worker " + (lease.worker_index ?? "?") +
-      (lease.project ? " &mdash; " + lease.project : "");
+      "<code>" + (c.name || c.container_id.slice(0, 12)) + "</code>" +
+      " <span class=\"container-status status-" + statusLabel + "\">" + statusLabel + "</span>" +
+      " &mdash; port " + (c.xpra_port || "?") +
+      ", worker " + (c.worker_index ?? "?") +
+      (c.project ? " &mdash; " + c.project : "");
     div.appendChild(info);
 
-    if (lease.xpra_url) {
+    if (c.xpra_url) {
       const viewBtn = document.createElement("button");
       viewBtn.className = "small";
-      viewBtn.textContent = openViewers[lease.lease_id] ? "Hide" : "View";
+      viewBtn.textContent = openViewers[c.container_id] ? "Hide" : "View";
       viewBtn.addEventListener("click", () => {
         const viewer = wrapper.querySelector(".lease-viewer");
         if (viewer) {
           viewer.remove();
-          delete openViewers[lease.lease_id];
+          delete openViewers[c.container_id];
           viewBtn.textContent = "View";
         } else {
-          const container = document.createElement("div");
-          container.className = "lease-viewer";
-          const iframe = document.createElement("iframe");
-          iframe.src = lease.xpra_url + "&keyboard=false";
-          iframe.className = "xpra-iframe";
-          container.appendChild(iframe);
-          wrapper.appendChild(container);
-          openViewers[lease.lease_id] = true;
+          wrapper.appendChild(createViewerEl(c.xpra_url));
+          openViewers[c.container_id] = true;
           viewBtn.textContent = "Hide";
         }
       });
@@ -125,31 +142,27 @@ function renderLeases(leases) {
 
       const link = document.createElement("a");
       link.href = "#";
-      link.textContent = "Open Xpra";
+      link.textContent = "Open in Browser";
       link.addEventListener("click", (e) => {
         e.preventDefault();
-        window.__TAURI__.opener.openUrl(lease.xpra_url);
+        window.__TAURI__.opener.openUrl(c.xpra_url);
       });
       div.appendChild(link);
     }
 
-    const releaseBtn = document.createElement("button");
-    releaseBtn.className = "danger small";
-    releaseBtn.textContent = "Release";
-    releaseBtn.addEventListener("click", () => handleRelease(lease.lease_id));
-    div.appendChild(releaseBtn);
+    if (c.status === "leased") {
+      const releaseBtn = document.createElement("button");
+      releaseBtn.className = "danger small";
+      releaseBtn.textContent = "Release";
+      releaseBtn.addEventListener("click", () => handleRelease(c.lease_id));
+      div.appendChild(releaseBtn);
+    }
 
     wrapper.appendChild(div);
 
     // Re-open viewer if it was open before refresh
-    if (openViewers[lease.lease_id] && lease.xpra_url) {
-      const container = document.createElement("div");
-      container.className = "lease-viewer";
-      const iframe = document.createElement("iframe");
-      iframe.src = lease.xpra_url + "&keyboard=false";
-      iframe.className = "xpra-iframe";
-      container.appendChild(iframe);
-      wrapper.appendChild(container);
+    if (openViewers[c.container_id] && c.xpra_url) {
+      wrapper.appendChild(createViewerEl(c.xpra_url));
     }
 
     leasesListEl.appendChild(wrapper);
@@ -168,15 +181,15 @@ function renderLeases(leases) {
     if (id) handleRelease(id);
   });
 
-  if (leases.length === 0) {
+  if (containers.length === 0) {
     const empty = document.createElement("p");
     empty.className = "empty-state";
-    empty.textContent = "No active leases in the pool.";
+    empty.textContent = "No running containers in the pool.";
     leasesListEl.insertBefore(empty, row);
   }
 
-  // Clean up openViewers for leases that no longer exist
-  const activeIds = new Set(leases.map((l) => l.lease_id));
+  // Clean up openViewers for containers that no longer exist
+  const activeIds = new Set(containers.map((c) => c.container_id));
   for (const id of Object.keys(openViewers)) {
     if (!activeIds.has(id)) delete openViewers[id];
   }
@@ -198,7 +211,7 @@ async function handleAcquire(e) {
   try {
     const result = await invoke("pool_acquire", { project, network, mount, timeout });
     acquireResult.textContent = result;
-    lastLeasesJson = "";
+    lastContainersJson = "";
     refreshStatus();
   } catch (e) {
     acquireResult.textContent = "Error: " + e;
@@ -212,7 +225,7 @@ async function handleRelease(leaseId) {
     const result = await invoke("pool_release", { leaseId });
     showOutput(result || "Released successfully.");
     delete openViewers[leaseId];
-    lastLeasesJson = "";
+    lastContainersJson = "";
     refreshStatus();
   } catch (e) {
     showOutput("Release error: " + e);
@@ -264,7 +277,7 @@ async function handleDestroyAll() {
     const result = await invoke("pool_destroy_all");
     showOutput(result || "All containers destroyed.");
     openViewers = {};
-    lastLeasesJson = "";
+    lastContainersJson = "";
     refreshStatus();
   } catch (e) {
     showOutput("Destroy error: " + e);

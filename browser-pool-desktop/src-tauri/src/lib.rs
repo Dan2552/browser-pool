@@ -107,6 +107,24 @@ fn pool_list_leases() -> Result<String, String> {
 }
 
 #[tauri::command]
+fn pool_list_containers() -> Result<String, String> {
+    let output = Command::new(cli_path())
+        .args(&["list-containers"])
+        .env("BROWSER_POOL_QUIET", "1")
+        .output()
+        .map_err(|e| format!("Failed to execute CLI: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+
+    if output.status.success() {
+        Ok(stdout)
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        Err(format!("{}{}", stderr, stdout))
+    }
+}
+
+#[tauri::command]
 fn pool_release(lease_id: String) -> Result<String, String> {
     run_cli(&["release", &lease_id])
 }
@@ -166,6 +184,7 @@ pub fn run() {
             pool_status,
             pool_acquire,
             pool_list_leases,
+            pool_list_containers,
             pool_release,
             pool_gc,
             pool_destroy_all,

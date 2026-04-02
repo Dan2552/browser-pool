@@ -294,6 +294,50 @@ cmd_list_leases() {
   printf ']\n'
 }
 
+cmd_list_containers() {
+  local file
+  local first=true
+  printf '['
+  while IFS= read -r file; do
+    [[ -n "$file" ]] || continue
+
+    local container_id status lease_id project worker_index leased_at updated_at
+    container_id="$(grep '"container_id"' "$file" | sed 's/.*: *"\([^"]*\)".*/\1/')"
+    status="$(grep '"status"' "$file" | sed 's/.*: *"\([^"]*\)".*/\1/')"
+    lease_id="$(grep '"lease_id"' "$file" | sed 's/.*: *"\([^"]*\)".*/\1/')"
+    worker_index="$(grep '"worker_index"' "$file" | sed 's/.*: *\(-\{0,1\}[0-9]*\).*/\1/')"
+    updated_at="$(grep '"updated_at"' "$file" | sed 's/.*: *\([0-9]*\).*/\1/')"
+
+    if [[ "$status" == "leased" ]]; then
+      project="$(grep '"leased_by"' "$file" | sed 's/.*: *"\([^"]*\)".*/\1/')"
+      leased_at="$(grep '"leased_at"' "$file" | sed 's/.*: *\([0-9]*\).*/\1/')"
+    else
+      project=""
+      leased_at="0"
+    fi
+
+    # Verify container is running
+    if ! docker inspect "$container_id" > /dev/null 2>&1; then
+      continue
+    fi
+
+    local port
+    port="$(bp_container_port "$container_id")"
+
+    local name
+    name="$(bp_container_name "$container_id" 2>/dev/null)" || name="${container_id:0:12}"
+
+    if [[ "$first" == "true" ]]; then
+      first=false
+    else
+      printf ','
+    fi
+    printf '{"container_id":"%s","name":"%s","status":"%s","lease_id":"%s","xpra_port":%s,"worker_index":%s,"project":"%s","leased_at":%s,"updated_at":%s,"xpra_url":"http://127.0.0.1:%s/?reconnect=true"}' \
+      "$container_id" "$name" "$status" "$lease_id" "$port" "$worker_index" "$project" "$leased_at" "$updated_at" "$port"
+  done < <(bp_list_lease_files)
+  printf ']\n'
+}
+
 cmd_gc() {
   local max_idle="$BROWSER_POOL_IDLE_TTL"
 
@@ -356,6 +400,7 @@ case "$command" in
   build)       cmd_build ;;
   config)      cmd_config ;;
   list-leases) cmd_list_leases ;;
+  list-containers) cmd_list_containers ;;
   dashboard)   exec "${BROWSER_POOL_BIN_DIR}/browser-pool-dashboard" "$@" ;;
   help|--help|-h) usage ;;
   *)
