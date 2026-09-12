@@ -18,10 +18,9 @@ RUN apt-get update \
     && echo "deb [signed-by=/usr/share/keyrings/xpra.gpg] https://xpra.org/ noble main" > /etc/apt/sources.list.d/xpra.list \
     && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      xpra=6.4.3-r0-1 \
-      xpra-server=6.4.3-r0-1 \
-      xpra-x11=6.4.3-r0-1 \
-      xpra-html5=19-r1-1 \
+      xpra-server \
+      xpra-x11 \
+      xpra-html5 \
     && rm -rf /var/lib/apt/lists/*
 
 # Allow Xpra to be embedded in iframes (for the dashboard)
